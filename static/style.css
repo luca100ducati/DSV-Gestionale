@@ -1,0 +1,50 @@
+/* =====================================================================
+   STYLE.CSS - Tema "Deep Blue Glass" (NiceGUI Edition)
+===================================================================== */
+
+:root {
+    --bg-gradient: linear-gradient(135deg, #0b1a30 0%, #1a365d 50%, #2e1065 100%);
+    --glass-bg: rgb(14, 6, 92);
+    --glass-border: rgb(27, 25, 25);
+    --text-main: #ebf1f7;
+    --text-muted: #b2c0d3;
+    --accent-blue: #2389a0;
+}
+
+/* --- 1. SFONDO GLOBALE --- */
+body {
+    background: var(--bg-gradient) !important;
+}
+
+/* --- 2. SIDEBAR E LAYOUT --- */
+.sidebar {
+    background-color: rgba(11, 26, 48, 0.8) !important;
+}
+
+/* --- 3. COMPONENTI CARD (KPI E ALTRO) --- */
+.glass-card {
+    background: var(--glass-bg);
+}
+
+/* Colore del bordo dell'input */
+.custom-input .q-field__control:before, 
+.custom-input .q-field__control:after {
+    border-color: white !important;
+}
+
+/* Colore del testo inserito */
+.custom-input .q-field__native, 
+.custom-input .q-field__input {
+    color: white !important;
+}
+
+/* Colore del segnaposto (placeholder) */
+.custom-input .q-field__label, 
+.custom-input .q-field__native::placeholder {
+    color: rgba(255, 255, 255, 0.7) !important;
+}
+
+/* Icona dell'input bianca (se ne usi) */
+.custom-input .q-icon {
+    color: white !important;
+}
