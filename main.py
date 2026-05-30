@@ -3,6 +3,7 @@ from nicegui import app, ui
 from utils.supabase_client import get_supabase
 import urllib.parse  # Aggiungi questo in cima al file main.py se non c'è già
 from urllib.parse import quote
+import mobile_app
 import os
 from groq import AsyncGroq
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
@@ -12,6 +13,9 @@ from langchain_community.vectorstores import FAISS
 # Inizializziamo il "Cervello" di Radu
 GROQ_API_KEY = "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" 
 groq_client = AsyncGroq(api_key=GROQ_API_KEY)
+
+
+
 
 # L'Anima di Radu (Il Prompt di Sistema)
 radu_prompt = """Sei Radu, Moldavo, da 10 anni in Italia. un onesto lavoratore di 35 anni con 20 anni di esperienza nella logistica, nei cantieri e nel sudore. 
@@ -657,47 +661,82 @@ def layout_principale():
                         ui.notify('Seleziona almeno un elemento dalla tabella per stampare le etichette!', type='warning')
                         return
 
-                    # Apriamo la finestra di dialogo ottimizzata per la stampa
-                    with ui.dialog() as dialog, ui.card().classes('bg-blue-900 w-full max-w-5xl p-6 rounded-lg border border-gray-600 printable-sheet'):
+                    # SCRIPT MAGICO: Estrae solo l'area desiderata, la mette in una nuova finestra e la stampa
+                    js_stampa = '''
+                        const el = document.getElementById("area-da-stampare");
+                        if (!el) return;
                         
-                        # Barra di controllo superiore (.no-print: scompare in fase di stampa reale)
-                        with ui.row().classes('w-full justify-between items-center mb-6 no-print'):
+                        // Apre una finestra temporanea
+                        const win = window.open("", "_blank");
+                        win.document.write("<html><head><title>Stampa Etichette DSV</title>");
+                        
+                        // Clona tutti gli stili e le classi (Tailwind) dalla pagina originale
+                        document.querySelectorAll('style, link[rel="stylesheet"]').forEach(s => {
+                            win.document.write(s.outerHTML);
+                        });
+                        
+                        // Aggiunge la regola per spezzare i fogli
+                        win.document.write("<style>");
+                        win.document.write("@media print { .foglio-a4 { page-break-after: always !important; border: none !important; margin: 0 !important; } }");
+                        win.document.write("body { background-color: white !important; }");
+                        win.document.write("</style></head><body class='bg-white p-8'>");
+                        
+                        // Incolla i QR code
+                        win.document.write(el.innerHTML);
+                        win.document.write("</body></html>");
+                        win.document.close();
+                        
+                        // Aspetta 1 secondo per far caricare le immagini dei QR, stampa e chiude il popup
+                        setTimeout(() => { 
+                            win.focus(); 
+                            win.print(); 
+                            win.close(); 
+                        }, 1000);
+                    '''
+
+                    # La nostra finestra di dialogo serve ora SOLO come anteprima visiva
+                    with ui.dialog() as dialog, ui.card().classes('bg-gray-100 w-full max-w-5xl p-6 rounded-lg'):
+                        
+                        # Barra superiore (non si stamperà perché non la includiamo nell'estrazione)
+                        with ui.row().classes('w-full justify-between items-center mb-6 bg-blue-900 p-4 rounded'):
                             with ui.column():
-                                ui.label('🖨️ Generatore Etichette (Layout Schizzo)').classes('text-2xl font-bold text-white')
-                                ui.label(f'Pronto per la stampa di {len(stampe_selezionati)} etichette.').classes('text-blue-300')
+                                ui.label('🖨️ Anteprima di Stampa A4').classes('text-2xl font-bold text-white')
+                                ui.label(f'{len(stampe_selezionati)} etichette totali pronti per l\'esportazione.').classes('text-blue-300')
                             with ui.row().classes('gap-3'):
                                 ui.button('Annulla', on_click=dialog.close).props('outline color="white"')
-                                ui.button('Avvia Stampa', icon='print', on_click=lambda: ui.run_javascript('window.print()')).classes('bg-green-600 text-white font-bold px-6')
+                                # Il pulsante ora lancia il nostro script JS
+                                ui.button('Salva PDF / Stampa', icon='print', on_click=lambda: ui.run_javascript(js_stampa)).classes('bg-green-600 text-white font-bold px-6')
 
-                        # Area del foglio (bianca)
-                        with ui.element('div').classes('bg-white p-6 rounded border border-gray-300 w-full text-black'):
-                            # Griglia a 2 colonne
-                            with ui.grid(columns=2).classes('w-full gap-4 justification-center'):
+                        etichette_per_pagina = 12
+                        blocchi_pagine = [stampe_selezionati[i:i + etichette_per_pagina] for i in range(0, len(stampe_selezionati), etichette_per_pagina)]
+
+                        # Area di scorrimento sicura per l'anteprima
+                        with ui.scroll_area().classes('w-full h-[650px]'):
+                            
+                            # ATTENZIONE: Questo è il contenitore col "bersaglio" (id="area-da-stampare")
+                            with ui.column().classes('w-full').props('id="area-da-stampare"'):
                                 
-                                for asset in stampe_selezionati:
-                                    # Generiamo il contenuto del QR Code (solo ID per scansioni più pulite)
-                                    dati_qr = f"{asset.get('id', '')}" 
-                                    dati_codificati = urllib.parse.quote(dati_qr)
-                                    url_immagine = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={dati_codificati}"
+                                for indice_pagina, blocco in enumerate(blocchi_pagine):
                                     
-                                    # --- TARGHETTA (Outer Card - Stile Industriale Semplificato) ---
-                                    with ui.card().classes('bg-white border-2 border-black rounded-none shadow-none p-4 print-label-card w-full text-black'):
-                                        
-                                        # RIGA PRINCIPALE che divide l'etichetta in due aree (Sinistra e Destra)
-                                        with ui.row().classes('w-full items-center justify-start gap-8 no-wrap'):
+                                    # Foglio visivo
+                                    with ui.column().classes('foglio-a4 bg-white p-6 rounded border border-gray-400 w-full mb-8'):
+                                        with ui.grid(columns=2).classes('w-full gap-4 justify-center'):
                                             
-                                            # COLONNA SINISTRA -> Solo il QR Code
-                                            ui.image(url_immagine).classes('w-28 h-28 flex-shrink-0')
-                                            
-                                            # COLONNA DESTRA -> Incolonniamo Logo e ID verticalmente
-                                            with ui.column().classes('gap-3 items-start justify-center'):
+                                            for asset in blocco:
+                                                dati_qr = f"{asset.get('id', '')}" 
+                                                from urllib.parse import quote
+                                                dati_codificati = quote(dati_qr)
+                                                url_immagine = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={dati_codificati}"
                                                 
-                                                # Riga 1: Logo aziendale
-                                                ui.image('dsv-print-logo.png').classes('w-32 h-10').props('fit=contain')
-                                                
-                                                # Riga 2: ID dell'oggetto evidenziato
-                                                ui.label(asset.get('id', 'N/A')).classes('text-lg font-mono font-bold bg-black text-white px-3 py-1 rounded')
-                    dialog.open()
+                                                # Etichetta singola
+                                                with ui.card().classes('bg-white border-2 border-black rounded-none shadow-none p-4 w-full text-black'):
+                                                    with ui.row().classes('w-full items-center justify-start gap-8 no-wrap'):
+                                                        ui.image(url_immagine).classes('w-28 h-28 flex-shrink-0')
+                                                        with ui.column().classes('gap-3 items-start justify-center'):
+                                                            ui.image('dsv-print-logo.png').classes('w-32 h-10').props('fit=contain')
+                                                            ui.label(asset.get('id', 'N/A')).classes('text-lg font-mono font-bold bg-black text-white px-3 py-1 rounded')
+
+                    dialog.open()                    
 
 
                 def sposta_massa(move_selezionati):
@@ -1105,55 +1144,143 @@ def layout_principale():
                         return
                     riga = tabella_spostamenti.selected[0]
                     
+                    # SCRIPT MAGICO: Stampa in background senza crash
+                    js_stampa = '''
+                        const el = document.getElementById("area-ddt");
+                        if (!el) return;
+                        const win = window.open("", "_blank");
+                        win.document.write("<html><head><title>Stampa Documento</title>");
+                        document.querySelectorAll('style, link[rel="stylesheet"]').forEach(s => win.document.write(s.outerHTML));
+                        win.document.write("<style>@media print { body { background-color: white !important; -webkit-print-color-adjust: exact; } }</style>");
+                        win.document.write("</head><body class='bg-white flex justify-center p-4'>");
+                        win.document.write(el.outerHTML);
+                        win.document.write("</body></html>");
+                        win.document.close();
+                        setTimeout(() => { win.focus(); win.print(); win.close(); }, 1000);
+                    '''
+
                     if riga['is_ddt']:
                         res_items = supabase.table('movimenti').eq('ddt_id', riga['id']).execute()
                         items_mov = res_items.data if hasattr(res_items, 'data') else []
                         
-                        with ui.dialog() as diag_print, ui.card().classes('bg-white w-full max-w-4xl p-6 rounded-lg text-black printable-sheet'):
-                            with ui.row().classes('w-full justify-between items-end border-b-4 border-black pb-4 mb-4'):
-                                ui.label('DSV LOGISTICS').classes('text-2xl font-black tracking-wider text-black')
-                                ui.label(f"DOCUMENTO DI TRASPORTO").classes('text-xl font-bold text-black')
+                        with ui.dialog() as diag_print, ui.card().classes('bg-gray-100 w-full max-w-5xl p-6 rounded-lg'):
                             
-                            with ui.grid(columns=2).classes('w-full gap-4 mb-6 text-sm text-black'):
-                                with ui.column():
-                                    ui.label(f"Numero documento: {riga['numero']}").classes('font-bold')
-                                    ui.label(f"Data emissione: {riga['data']}")
-                                    ui.label(f"Causale: {riga['causale']}")
-                                with ui.column():
-                                    ui.label(f"Da: {riga['partenza']}")
-                                    ui.label(f"A: {riga['arrivo']}")
-                                    ui.label(f"Vettore: {riga['vettore']}")
-                            
-                            ui.label('ELENCO MATERIALI TRASPORTATI').classes('font-bold border-b border-black pb-1 mb-2 text-black')
-                            with ui.column().classes('w-full gap-1 border border-black p-2'):
-                                for idx, it in enumerate(items_mov):
-                                    inv_item = stato['inventario_dict'].get(it['asset_id'], {})
-                                    nome_art = inv_item.get('articolo') or inv_item.get('nome') or inv_item.get('descrizione') or it['asset_id']
-                                    ui.label(f"{idx+1}. [{it['asset_id']}] {nome_art}").classes('text-black text-sm')
+                            # BARRA DI CONTROLLO (Non verrà stampata)
+                            with ui.row().classes('w-full justify-between items-center mb-6 bg-blue-900 p-4 rounded'):
+                                ui.label(f"🖨️ Anteprima DDT N. {riga['numero']}").classes('text-xl font-bold text-white')
+                                with ui.row().classes('gap-3'):
+                                    ui.button('Annulla', on_click=diag_print.close).props('outline color="white"')
+                                    ui.button('Stampa DDT', icon='print', on_click=lambda: ui.run_javascript(js_stampa)).classes('bg-green-600 text-white font-bold px-6')
+
+                            with ui.scroll_area().classes('w-full h-[700px] flex justify-center'):
+                                
+                                # AREA DA STAMPARE (Il vero e proprio foglio DDT)
+                                with ui.column().classes('w-full max-w-4xl bg-white text-black p-10 border border-gray-300 shadow-xl min-h-[1000px]').props('id="area-ddt"'):
                                     
-                            with ui.row().classes('w-full justify-end gap-3 mt-6 no-print'):
-                                ui.button('Chiudi', on_click=diag_print.close).props('outline color="black"')
-                                ui.button('Avvia Stampa', icon='print', on_click=lambda: ui.run_javascript('window.print()')).classes('bg-green-600 text-white font-bold')
+                                    # INTESTAZIONE: Mittente e Destinatario
+                                    with ui.row().classes('w-full justify-between items-start mb-8'):
+                                        # Mittente (Layout DSV dal PDF)
+                                        with ui.column().classes('gap-0'):
+                                            ui.image('dsv-print-logo.png').classes('w-40 h-12 mb-2').props('fit=contain')
+                                            ui.label('DSV SPA').classes('font-black text-lg')
+                                            ui.label('Via Fratelli Bandiera, 29').classes('text-sm')
+                                            ui.label('20068 Peschiera Borromeo (MI)').classes('text-sm')
+                                        
+                                        # Destinatario
+                                        with ui.column().classes('border-2 border-black p-4 w-72 gap-1 rounded'):
+                                            ui.label('Destinatario / Luogo di destinazione:').classes('text-xs text-gray-500 font-bold uppercase')
+                                            ui.label(riga['arrivo']).classes('font-black text-md leading-tight')
+
+                                    # DETTAGLI DOCUMENTO
+                                    with ui.row().classes('w-full justify-between items-center border-t-2 border-b-2 border-black py-3 mb-6'):
+                                        with ui.column().classes('gap-0'):
+                                            ui.label('DOCUMENTO DI TRASPORTO').classes('text-xl font-black uppercase')
+                                            ui.label('D.d.t. (D.P.R. 472/96)').classes('text-xs text-gray-600')
+                                        with ui.row().classes('gap-8'):
+                                            with ui.column().classes('gap-0'):
+                                                ui.label('Data').classes('text-xs text-gray-500 font-bold')
+                                                ui.label(str(riga['data'])).classes('font-bold text-lg')
+                                            with ui.column().classes('gap-0'):
+                                                ui.label('N. DDT').classes('text-xs text-gray-500 font-bold')
+                                                ui.label(str(riga['numero'])).classes('font-bold text-lg')
+
+                                    ui.label(f"CAUSALE: {riga['causale']}").classes('mb-6 text-sm font-bold uppercase')
+                                    
+                                    # TABELLA ARTICOLI
+                                    with ui.column().classes('w-full flex-grow'):
+                                        with ui.row().classes('w-full border-b-2 border-black font-black text-sm pb-1 mb-2'):
+                                            ui.label('Item').classes('w-12')
+                                            ui.label('Descrizione').classes('flex-1')
+                                            ui.label('Q.tà').classes('w-16 text-right')
+                                        
+                                        for idx, it in enumerate(items_mov):
+                                            inv_item = stato['inventario_dict'].get(it['asset_id'], {})
+                                            nome_art = inv_item.get('articolo') or inv_item.get('nome') or inv_item.get('descrizione') or it['asset_id']
+                                            with ui.row().classes('w-full border-b border-gray-300 text-sm py-2'):
+                                                ui.label(str(idx+1)).classes('w-12 font-bold')
+                                                ui.label(f"[{it['asset_id']}] {nome_art}").classes('flex-1')
+                                                ui.label('1').classes('w-16 text-right') # Poiché sono asset univoci
+                                    
+                                    # PIE DI PAGINA (Vettore e Firme)
+                                    with ui.row().classes('w-full border-2 border-black p-0 mt-8 no-wrap'):
+                                        with ui.column().classes('w-1/3 p-3 border-r-2 border-black gap-1'):
+                                            ui.label('Trasporto / Vettore:').classes('text-xs font-bold uppercase text-gray-600')
+                                            ui.label(riga['vettore']).classes('font-bold text-sm')
+                                            ui.label(f"Partenza: {riga['partenza']}").classes('text-xs mt-2')
+                                        
+                                        with ui.column().classes('w-1/3 p-3 border-r-2 border-black gap-1'):
+                                            ui.label('Note:').classes('text-xs font-bold uppercase text-gray-600')
+                                            ui.label(riga.get('note') or 'Nessuna nota').classes('text-xs')
+                                        
+                                        with ui.column().classes('w-1/3 p-3 gap-1 justify-end'):
+                                            ui.label('Firma:').classes('text-xs font-bold uppercase text-gray-600')
+                                            ui.label('________________________').classes('mt-6 text-gray-400')
+
                         diag_print.open()
+
                     else:
-                        with ui.dialog() as diag_print, ui.card().classes('bg-white w-full max-w-4xl p-6 rounded-lg text-black printable-sheet'):
-                            with ui.row().classes('w-full justify-between items-end border-b-4 border-black pb-4 mb-4'):
-                                ui.label('DSV LOGISTICS').classes('text-2xl font-black tracking-wider text-black')
-                                ui.label(f"RICEVUTA SPOSTAMENTO DIRETTO").classes('text-xl font-bold text-black')
-                            
-                            with ui.column().classes('w-full gap-2 text-sm text-black mt-4'):
-                                ui.label(f"Oggetto Spostato: {riga['numero']}").classes('text-lg font-bold')
-                                ui.label(f"Data Trasferimento: {riga['data']}")
-                                ui.label(f"Luogo Partenza: {riga['partenza']}")
-                                ui.label(f"Luogo Destinazione: {riga['arrivo']}")
-                                ui.label(f"Eseguito da (Operatore): {riga['vettore']}")
-                                if riga.get('note'):
-                                    ui.label(f"Note: {riga['note']}").classes('italic mt-2 text-gray-700')
-                                    
-                            with ui.row().classes('w-full justify-end gap-3 mt-6 no-print'):
-                                ui.button('Chiudi', on_click=diag_print.close).props('outline color="black"')
-                                ui.button('Avvia Stampa', icon='print', on_click=lambda: ui.run_javascript('window.print()')).classes('bg-green-600 text-white font-bold')
+                        # RICEVUTA SPOSTAMENTO DIRETTO (Senza DDT)
+                        with ui.dialog() as diag_print, ui.card().classes('bg-gray-100 w-full max-w-3xl p-6 rounded-lg'):
+                            with ui.row().classes('w-full justify-between items-center mb-6 bg-blue-900 p-4 rounded'):
+                                ui.label('🖨️ Anteprima Ricevuta').classes('text-xl font-bold text-white')
+                                with ui.row().classes('gap-3'):
+                                    ui.button('Annulla', on_click=diag_print.close).props('outline color="white"')
+                                    ui.button('Stampa Ricevuta', icon='print', on_click=lambda: ui.run_javascript(js_stampa)).classes('bg-green-600 text-white font-bold px-6')
+
+                            # AREA DA STAMPARE (Ricevuta Semplice)
+                            with ui.column().classes('w-full bg-white text-black p-8 border border-gray-300 shadow-lg').props('id="area-ddt"'):
+                                with ui.row().classes('w-full justify-between items-end border-b-4 border-black pb-4 mb-6'):
+                                    ui.image('dsv-print-logo.png').classes('w-32 h-10').props('fit=contain')
+                                    ui.label('RICEVUTA SPOSTAMENTO INTERNO').classes('text-lg font-black text-black')
+                                
+                                with ui.column().classes('w-full gap-4 text-base text-black mt-2'):
+                                    with ui.row().classes('w-full border-b border-gray-200 pb-2'):
+                                        ui.label('Oggetto Spostato:').classes('w-40 font-bold text-gray-500')
+                                        ui.label(riga['numero']).classes('font-black text-lg')
+                                    with ui.row().classes('w-full border-b border-gray-200 pb-2'):
+                                        ui.label('Data Trasferimento:').classes('w-40 font-bold text-gray-500')
+                                        ui.label(str(riga['data']))
+                                    with ui.row().classes('w-full border-b border-gray-200 pb-2'):
+                                        ui.label('Luogo Partenza:').classes('w-40 font-bold text-gray-500')
+                                        ui.label(riga['partenza'])
+                                    with ui.row().classes('w-full border-b border-gray-200 pb-2'):
+                                        ui.label('Luogo Destinazione:').classes('w-40 font-bold text-gray-500')
+                                        ui.label(riga['arrivo']).classes('font-bold')
+                                    with ui.row().classes('w-full border-b border-gray-200 pb-2'):
+                                        ui.label('Eseguito da:').classes('w-40 font-bold text-gray-500')
+                                        ui.label(riga['vettore'])
+                                    if riga.get('note'):
+                                        with ui.row().classes('w-full bg-gray-50 p-3 rounded mt-2'):
+                                            ui.label(f"Note: {riga['note']}").classes('italic text-gray-700')
+                                            
+                                with ui.row().classes('w-full justify-end mt-12'):
+                                    ui.column().classes('items-center').add(
+                                        ui.label('Firma Operatore').classes('text-xs text-gray-500'),
+                                        ui.label('_________________________').classes('mt-4 text-gray-300')
+                                    )
+
                         diag_print.open()
+
 
                 def apri_wizard_ddt():
                     pass # Mantenuto intatto il corpo del tuo wizard qui sotto...
@@ -2443,5 +2570,5 @@ with ui.right_drawer().props("width=180").classes('bg-blue-900 items-center'):
             
     #ui.label('Chiedi a RADU').classes('text-white mt-2 font-bold')
 layout_principale()
-ui.run(favicon='logo-dsv-w.png')
+ui.run(host='0.0.0.0', port=8080, favicon='logo-dsv-w.png')
 
